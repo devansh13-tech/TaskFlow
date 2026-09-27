@@ -17,6 +17,7 @@ Modules Covered:
 """
 
 import os
+import tempfile
 
 
 class Config:
@@ -30,8 +31,13 @@ class Config:
     # python -c "import secrets; print(secrets.token_hex(32))"
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-taskflow-2026")
 
-    # SQLite Database filename / path
-    DATABASE = os.environ.get("DATABASE", "tasks.db")
+    # SQLite Database filename / path:
+    # On Vercel (serverless AWS Lambda environment), the root filesystem is read-only.
+    # Writable files must be stored in /tmp. On Render or local development, use tasks.db.
+    if os.environ.get("VERCEL"):
+        DATABASE = os.environ.get("DATABASE", os.path.join(tempfile.gettempdir(), "tasks.db"))
+    else:
+        DATABASE = os.environ.get("DATABASE", "tasks.db")
 
     # Debug mode flag:
     # Defaults to True locally for hot-reload and informative traceback pages.

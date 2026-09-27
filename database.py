@@ -17,42 +17,16 @@ Modules Covered:
   - Module 22: Complete CRUD Operations
 =============================================================================
 """
-
+import os
 import sqlite3
+import tempfile
 from flask import current_app
 
-DATABASE_NAME = "tasks.db"
+DATABASE_NAME = os.path.join(tempfile.gettempdir(), "tasks.db") if os.environ.get("VERCEL") else "tasks.db"
 
 
-def get_db():
-    """
-    Establish and return a connection to the SQLite database.
-
-    sqlite3.Row allows column access by name (e.g. row['title'])
-    rather than numeric tuple index (e.g. row[2]).
-    """
-    # Use database path configured in Flask config, or fall back to default
-    try:
-        db_path = current_app.config.get("DATABASE", DATABASE_NAME)
-    except RuntimeError:
-        db_path = DATABASE_NAME
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    # Enable SQLite Foreign Key constraint enforcement
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
-
-
-def init_db():
-    """
-    Initialize tables in tasks.db if they do not already exist.
-
-    Schema:
-      1. users: id, name, email (UNIQUE), created_at
-      2. tasks: id, user_id (FK to users.id), title, description, status, created_at
-    """
-    conn = get_db()
+def _init_schema(conn):
+    """Internal helper to initialize tables and initial seed data."""
     cursor = conn.cursor()
 
     # Table 1: users (Module 18)
@@ -78,7 +52,60 @@ def init_db():
         );
     """)
 
+    # Seed initial demo user and task if empty so serverless instances aren't blank
+    cursor.execute("""
+        INSERT OR IGNORE INTO users (id, name, email)
+        VALUES (1, 'Alice Smith', 'alice@example.com');
+    """)
+    cursor.execute("""
+        INSERT OR IGNORE INTO tasks (id, user_id, title, description, status)
+        VALUES (1, 1, 'Welcome to TaskFlow!', 'Explore the dashboard, create tasks, and test the REST API endpoints.', 'pending');
+    """)
     conn.commit()
+
+
+def get_db():
+    """
+    Establish and return a connection to the SQLite database.
+
+    sqlite3.Row allows column access by name (e.g. row['title'])
+    rather than numeric tuple index (e.g. row[2]).
+    """
+    # Use database path configured in Flask config, or fall back to default
+    try:
+        db_path = current_app.config.get("DATABASE", DATABASE_NAME)
+    except RuntimeError:
+        db_path = DATABASE_NAME
+
+    # Ensure parent directory exists (especially for /tmp paths in serverless)
+    db_dir = os.path.dirname(db_path)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+
+    # Check if database needs initialization (crucial for ephemeral serverless environments)
+    need_init = not os.path.exists(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    # Enable SQLite Foreign Key constraint enforcement
+    conn.execute("PRAGMA foreign_keys = ON;")
+
+    if need_init:
+        _init_schema(conn)
+
+    return conn
+
+
+def init_db():
+    """
+    Initialize tables in tasks.db if they do not already exist.
+
+    Schema:
+      1. users: id, name, email (UNIQUE), created_at
+      2. tasks: id, user_id (FK to users.id), title, description, status, created_at
+    """
+    conn = get_db()
+    _init_schema(conn)
     conn.close()
 
 
