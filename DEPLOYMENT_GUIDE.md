@@ -37,6 +37,9 @@ Make sure `.gitignore` excludes temporary files and local database files:
 git status
 ```
 
+> **Why exclude `*.db`?**
+> Local `.db` files contain testing/mock data and shouldn't be tracked in version control. In serverless deployments (like Vercel), our code automatically initializes an empty database with seed data inside the writable `/tmp` directory at runtime.
+
 ### Step 3: Stage and Commit All Files
 ```bash
 git add .
@@ -103,9 +106,11 @@ Render is a modern cloud hosting platform ideal for Flask applications because i
 Vercel is primarily a serverless platform designed for frontend frameworks, but supports Python WSGI applications via `@vercel/python`.
 
 ### Understanding Serverless with Flask & SQLite
-- On Render, the server runs continuously 24/7.
+- On Render, the server runs continuously 24/7 with a persistent disk.
 - On Vercel, requests trigger an **ephemeral serverless container** that spins down after seconds of inactivity.
-- **Important Limitation (Module 26)**: Local SQLite database files (`tasks.db`) stored on Vercel's filesystem are **ephemeral** and reset on each cold restart. For true persistence on Vercel, you would connect to a remote cloud database (such as PostgreSQL on Neon or Supabase).
+- **Read-Only Root Filesystem**: In Vercel's serverless runtime (`/var/task`), the code directory is strictly read-only. SQLite cannot create or write to a database file in the project root.
+- **The `/tmp` Solution**: The `/tmp` scratch directory is the only writable directory on Vercel. Our `config.py` detects `VERCEL=1` and routes SQLite to `/tmp/tasks.db`, while `database.py` auto-initializes the schema on first connection.
+- **Important Limitation (Module 26)**: Files in `/tmp` are **ephemeral** and reset on container cold restarts. For permanent production persistence on serverless platforms, connect to a cloud database (like PostgreSQL on Neon or Supabase). For SQLite persistence, use **Render** (Part 2).
 
 ### Configuration in `vercel.json`
 We have included `vercel.json`:
@@ -233,3 +238,30 @@ Expected response:
 }
 ```
 HTTP Status: `400 Bad Request`.
+
+---
+
+## 🛠️ PART 5: Troubleshooting Common Deployment Issues
+
+### 1. 500 Internal Server Error on Vercel
+- **Symptom**: Navigating to `/` displays the custom 500 Internal Server Error page, but `/about` loads fine (200 OK).
+- **Cause**: Vercel executes serverless functions in a read-only environment (`/var/task`). If `tasks.db` is targeted in the root project folder, SQLite throws `sqlite3.OperationalError: attempt to write a readonly database` when creating or modifying tables.
+- **Solution**:
+  1. In `config.py`, verify `DATABASE` points to `/tmp/tasks.db` when `VERCEL` is set:
+     ```python
+     if os.environ.get("VERCEL"):
+         DATABASE = os.environ.get("DATABASE", os.path.join(tempfile.gettempdir(), "tasks.db"))
+     ```
+  2. In `database.py`, ensure `get_db()` automatically calls `_init_schema(conn)` if the database file does not exist yet.
+
+### 2. Seeing Blank Tasks After Cold Starts on Vercel
+- **Symptom**: Tasks created previously disappear after 15–30 minutes of inactivity.
+- **Cause**: Serverless containers are ephemeral. Files written to `/tmp` are wiped when the container spins down.
+- **Solution**: For true data persistence, deploy to **Render** (Part 2) where Gunicorn runs with persistent local storage, or connect Flask to a hosted cloud database (e.g., PostgreSQL on Neon/Supabase).
+
+### 3. Missing Error Details in Production
+- **Symptom**: In production (`FLASK_DEBUG=False`), error traceback is suppressed for security.
+- **Solution**: Check runtime logs in your hosting provider:
+  - On Vercel: Dashboard &rarr; Project &rarr; **Logs** (or `vercel logs`).
+  - On Render: Dashboard &rarr; Web Service &rarr; **Logs**.
+  Our `app.py` error handler logs errors with `app.logger.error(..., exc_info=True)` to ensure stack traces appear in host logs.
